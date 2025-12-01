@@ -1,15 +1,15 @@
 use std::env;
+use std::fmt;
 use std::fs;
 use std::io;
 use std::path::Path;
-use std::fmt;
 
-// momentan un config simplu doar cu un string pt calea dir
+// config acum are si filters
 struct Config {
     dir: String,
+    filters: Vec<String>,
 }
 
-// err
 enum MyError {
     NotEnoughArgs,
     IoError(io::Error),
@@ -40,47 +40,79 @@ fn main() {
         }
     };
 
-    // rulam lgica din spate
     if let Err(e) = run(config) {
         eprintln!("Eroare la rulare: {}", e);
         std::process::exit(1);
     }
 }
 
+// acum citim si --filter <pattern>
 fn parse_args() -> Result<Config, MyError> {
     let mut args = env::args();
 
-    // primul este numele programului(tbdone)
+    // primul e numele programului
     let _program_name = args.next();
 
-    // al doilea(calea)
-    let dir_arg = match args.next() {
-        Some(s) => s,
+    let mut dir_arg: Option<String> = None;
+    let mut filters: Vec<String> = Vec::new();
+
+    // parcurgem restul argumentelor
+    while let Some(arg) = args.next() {
+        if arg == "--filter" {
+            if let Some(pat) = args.next() {
+                filters.push(pat);
+            } else {
+                eprintln!("Avertisment: --filter fara pattern, il ignor");
+            }
+        } else {
+            if dir_arg.is_none() {
+                dir_arg = Some(arg);
+            } else {
+                eprintln!("Avertisment: argument necunoscut sau in plus: {}", arg);
+            }
+        }
+    }
+
+    let dir = match dir_arg {
+        Some(d) => d,
         None => return Err(MyError::NotEnoughArgs),
     };
 
-    Ok(Config { dir: dir_arg })
+    Ok(Config { dir, filters })
 }
 
-//logica
 fn run(config: Config) -> Result<(), MyError> {
     let path = Path::new(&config.dir);
 
-    let total_size = calculate_dir_size(path)?;
+    let total_size = calculate_dir_size(path, &config.filters)?;
 
     let nice = format_size(total_size);
 
-    // formatul cerut
     println!("{} ({} bytes)", nice, total_size);
 
     Ok(())
 }
 
-fn calculate_dir_size(path: &Path) -> Result<u64, MyError> {
+// am adaugat filtre
+fn calculate_dir_size(path: &Path, filters: &Vec<String>) -> Result<u64, MyError> {
     let meta = fs::metadata(path)?;
 
     if meta.is_file() {
-        return Ok(meta.len());
+        // daca e fisier, vedem daca trece de filtre
+        // daca nu sunt filtre, il numaram oricum
+        let file_name_opt = path.file_name().and_then(|n| n.to_str());
+
+        if let Some(name) = file_name_opt {
+            if file_matches_filters(name, filters) {
+                return Ok(meta.len());
+            } else {
+                // nu se potriveste cu niciun filtru
+                return Ok(0);
+            }
+        } else {
+            // nume ciudat nu putem lua &str il sarim
+            return Ok(0);
+        }
     }
 
     if meta.is_dir() {
@@ -88,7 +120,6 @@ fn calculate_dir_size(path: &Path) -> Result<u64, MyError> {
         let entries = fs::read_dir(path)?;
 
         for entry_res in entries {
-            //tratam err cu match
             let entry = match entry_res {
                 Ok(e) => e,
                 Err(e) => {
@@ -98,21 +129,15 @@ fn calculate_dir_size(path: &Path) -> Result<u64, MyError> {
             };
 
             let child_path = entry.path();
-
-            // recursiv
-            let child_size_res = calculate_dir_size(&child_path);
-
+            let child_size_res = calculate_dir_size(&child_path, filters);
             match child_size_res {
                 Ok(sz) => {
-                    // cu sat_add ca sa nu facem overflow
                     sum = sum.saturating_add(sz);
                 }
                 Err(MyError::IoError(e)) => {
-                    //in caz de nu putem citi
                     eprintln!("Nu pot accesa {:?}: {}", child_path, e);
                 }
                 Err(MyError::NotEnoughArgs) => {
-                    //
                     eprintln!("Eroare ciudata la {:?} (NotEnoughArgs)", child_path);
                 }
             }
@@ -124,7 +149,23 @@ fn calculate_dir_size(path: &Path) -> Result<u64, MyError> {
     }
 }
 
-//fct pt bytes
+// functie simpla: momentan filtrele sunt doar "substring"
+fn file_matches_filters(name: &str, filters: &Vec<String>) -> bool {
+    if filters.is_empty() {
+        // daca nu e niciun filtru rice fisier e ok
+        return true;
+    }
+
+    for f in filters {
+        if name.contains(f) {
+            return true;
+        }
+    }
+
+    false
+}
+
+// formatam marimea in kb/mb/gb
 fn format_size(bytes: u64) -> String {
     let kb = 1024.0;
     let mb = kb * 1024.0;
@@ -133,7 +174,6 @@ fn format_size(bytes: u64) -> String {
     let b = bytes as f64;
 
     if b >= gb {
-        // un singur zecimal
         let value = b / gb;
         format!("{:.1}gb", value)
     } else if b >= mb {
@@ -143,12 +183,11 @@ fn format_size(bytes: u64) -> String {
         let value = b / kb;
         format!("{:.1}kb", value)
     } else {
-        // foarte mic-> tot bytes
         format!("{}b", bytes)
     }
 }
 
 fn print_usage() {
-    eprintln!("Utilizare:");
-    eprintln!("  dir_size <cale_director>");
+    eprintln!("Usage:");
+    eprintln!("  dir_size <dir> [--filter pattern] [--filter pattern2] ...");
 }
