@@ -2,12 +2,13 @@ use std::env;
 use std::fmt;
 use std::fs;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use regex::Regex;
 
+// config
 struct Config {
-    dir: String,
+    root: PathBuf,
     filters: Vec<String>,
 }
 
@@ -26,9 +27,68 @@ impl From<io::Error> for MyError {
 impl fmt::Display for MyError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            MyError::NotEnoughArgs => write!(f, "nu ai dat destule argumente (lipsește calea)"),
+            MyError::NotEnoughArgs => write!(f, "nu ai dat destule argumente (lipseste calea)"),
             MyError::IoError(e) => write!(f, "eroare de I/O: {}", e),
         }
+    }
+}
+
+trait SizeFormatter {
+    fn format_size(&self, bytes: u64) -> String;
+}
+
+struct HumanSizeFormatter;
+
+impl SizeFormatter for HumanSizeFormatter {
+    fn format_size(&self, bytes: u64) -> String {
+        let kb = 1024.0;
+        let mb = kb * 1024.0;
+        let gb = mb * 1024.0;
+
+        let b = bytes as f64;
+
+        if b >= gb {
+            let value = b / gb;
+            format!("{:.1}gb", value)
+        } else if b >= mb {
+            let value = b / mb;
+            format!("{:.1}mb", value)
+        } else if b >= kb {
+            let value = b / kb;
+            format!("{:.1}kb", value)
+        } else {
+            format!("{}b", bytes)
+        }
+    }
+}
+
+// structura
+struct DirSizeApp {
+    config: Config,
+    filters: Vec<Regex>,
+    formatter: HumanSizeFormatter,
+}
+
+impl DirSizeApp {
+    fn new(config: Config) -> DirSizeApp {
+        let filters = build_regex_filters(&config.filters);
+        DirSizeApp {
+            config,
+            filters,
+            formatter: HumanSizeFormatter,
+        }
+    }
+
+    fn run(&self) -> Result<(), MyError> {
+        let root_path = &self.config.root;
+
+        let total_size = calculate_dir_size(root_path, &self.filters)?;
+
+        let pretty = self.formatter.format_size(total_size);
+
+        println!("{} ({} bytes)", pretty, total_size);
+
+        Ok(())
     }
 }
 
@@ -42,22 +102,24 @@ fn main() {
         }
     };
 
-    if let Err(e) = run(config) {
+    let app = DirSizeApp::new(config);
+
+    if let Err(e) = app.run() {
         eprintln!("Eroare la rulare: {}", e);
         std::process::exit(1);
     }
 }
 
-// acum citim si --filter <pattern>
 fn parse_args() -> Result<Config, MyError> {
     let mut args = env::args();
 
-    // primul este numele programului
+    // primul e numele programului (nu-l folosim)
     let _program_name = args.next();
 
-    let mut dir_arg: Option<String> = None;
+    let mut root: Option<PathBuf> = None;
     let mut filters: Vec<String> = Vec::new();
 
+    // parcurgem toate argumentele
     while let Some(arg) = args.next() {
         if arg == "--filter" {
             if let Some(pat) = args.next() {
@@ -66,51 +128,35 @@ fn parse_args() -> Result<Config, MyError> {
                 eprintln!("Avertisment: --filter fara pattern, il ignor");
             }
         } else if arg == "--help" {
-            // mic ajutor optional
             print_usage();
             std::process::exit(0);
         } else {
-            if dir_arg.is_none() {
-                dir_arg = Some(arg);
+            if root.is_none() {
+                root = Some(PathBuf::from(arg));
             } else {
                 eprintln!("Avertisment: argument necunoscut sau in plus: {}", arg);
             }
         }
     }
 
-    let dir = match dir_arg {
-        Some(d) => d,
+    let root_path = match root {
+        Some(p) => p,
         None => return Err(MyError::NotEnoughArgs),
     };
 
-    Ok(Config { dir, filters })
+    Ok(Config {
+        root: root_path,
+        filters,
+    })
 }
 
-fn run(config: Config) -> Result<(), MyError> {
-    let path = Path::new(&config.dir);
-
-    // string in regex
-    let regex_filters = build_regex_filters(&config.filters);
-
-    let total_size = calculate_dir_size(path, &regex_filters)?;
-
-    let nice = format_size(total_size);
-
-    println!("{} ({} bytes)", nice, total_size);
-
-    Ok(())
-}
-
-// transformam filtrele string in Regex
+// transformam string in regex
 fn build_regex_filters(patterns: &Vec<String>) -> Vec<Regex> {
-    let mut result: Vec<Regex> = Vec::new();
+    let mut result = Vec::new();
 
     for pat in patterns {
-        // Regex::new intoarce Result<Regex, regex::Error>
         match Regex::new(pat) {
-            Ok(r) => {
-                result.push(r);
-            }
+            Ok(r) => result.push(r),
             Err(e) => {
                 eprintln!("Avertisment: nu pot compila regex-ul \"{}\": {}", pat, e);
             }
@@ -120,7 +166,7 @@ fn build_regex_filters(patterns: &Vec<String>) -> Vec<Regex> {
     result
 }
 
-// acum folosim filtrele ca Regex-uri
+// functie recursiva ce calculeaza dimensiunea
 fn calculate_dir_size(path: &Path, filters: &Vec<Regex>) -> Result<u64, MyError> {
     let meta = fs::metadata(path)?;
 
@@ -134,6 +180,7 @@ fn calculate_dir_size(path: &Path, filters: &Vec<Regex>) -> Result<u64, MyError>
                 return Ok(0);
             }
         } else {
+            // nume "ciudat
             return Ok(0);
         }
     }
@@ -170,14 +217,13 @@ fn calculate_dir_size(path: &Path, filters: &Vec<Regex>) -> Result<u64, MyError>
 
         Ok(sum)
     } else {
+        // pentru alte tipuri 
         Ok(0)
     }
 }
 
-// acum filtrele sunt regex
 fn file_matches_filters(name: &str, filters: &Vec<Regex>) -> bool {
     if filters.is_empty() {
-        // daca nu e niciun filtru, acceptam orice fisier
         return true;
     }
 
@@ -190,33 +236,11 @@ fn file_matches_filters(name: &str, filters: &Vec<Regex>) -> bool {
     false
 }
 
-// formatam marimea in kb/mb/gb
-fn format_size(bytes: u64) -> String {
-    let kb = 1024.0;
-    let mb = kb * 1024.0;
-    let gb = mb * 1024.0;
-
-    let b = bytes as f64;
-
-    if b >= gb {
-        let value = b / gb;
-        format!("{:.1}gb", value)
-    } else if b >= mb {
-        let value = b / mb;
-        format!("{:.1}mb", value)
-    } else if b >= kb {
-        let value = b / kb;
-        format!("{:.1}kb", value)
-    } else {
-        format!("{}b", bytes)
-    }
-}
-
 fn print_usage() {
     eprintln!("Usage:");
     eprintln!("  dir_size <dir> [--filter \"regex1\"] [--filter \"regex2\"] ...");
     eprintln!();
     eprintln!("Examples:");
-    eprintln!("  dir_size ./folder");
-    eprintln!("  dir_size ./folder --filter \".*\\.exe\" --filter \".*\\.dll\"");
+    eprintln!("  dir_size ./some_folder");
+    eprintln!("  dir_size ./some_folder --filter \".*\\.exe\" --filter \".*\\.dll\"");
 }
