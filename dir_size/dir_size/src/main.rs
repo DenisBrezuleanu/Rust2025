@@ -4,12 +4,14 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
-// config acum are si filters
+use regex::Regex;
+
 struct Config {
     dir: String,
     filters: Vec<String>,
 }
 
+// err
 enum MyError {
     NotEnoughArgs,
     IoError(io::Error),
@@ -50,13 +52,12 @@ fn main() {
 fn parse_args() -> Result<Config, MyError> {
     let mut args = env::args();
 
-    // primul e numele programului
+    // primul este numele programului
     let _program_name = args.next();
 
     let mut dir_arg: Option<String> = None;
     let mut filters: Vec<String> = Vec::new();
 
-    // parcurgem restul argumentelor
     while let Some(arg) = args.next() {
         if arg == "--filter" {
             if let Some(pat) = args.next() {
@@ -64,6 +65,10 @@ fn parse_args() -> Result<Config, MyError> {
             } else {
                 eprintln!("Avertisment: --filter fara pattern, il ignor");
             }
+        } else if arg == "--help" {
+            // mic ajutor optional
+            print_usage();
+            std::process::exit(0);
         } else {
             if dir_arg.is_none() {
                 dir_arg = Some(arg);
@@ -84,7 +89,10 @@ fn parse_args() -> Result<Config, MyError> {
 fn run(config: Config) -> Result<(), MyError> {
     let path = Path::new(&config.dir);
 
-    let total_size = calculate_dir_size(path, &config.filters)?;
+    // string in regex
+    let regex_filters = build_regex_filters(&config.filters);
+
+    let total_size = calculate_dir_size(path, &regex_filters)?;
 
     let nice = format_size(total_size);
 
@@ -93,24 +101,39 @@ fn run(config: Config) -> Result<(), MyError> {
     Ok(())
 }
 
-// am adaugat filtre
-fn calculate_dir_size(path: &Path, filters: &Vec<String>) -> Result<u64, MyError> {
+// transformam filtrele string in Regex
+fn build_regex_filters(patterns: &Vec<String>) -> Vec<Regex> {
+    let mut result: Vec<Regex> = Vec::new();
+
+    for pat in patterns {
+        // Regex::new intoarce Result<Regex, regex::Error>
+        match Regex::new(pat) {
+            Ok(r) => {
+                result.push(r);
+            }
+            Err(e) => {
+                eprintln!("Avertisment: nu pot compila regex-ul \"{}\": {}", pat, e);
+            }
+        }
+    }
+
+    result
+}
+
+// acum folosim filtrele ca Regex-uri
+fn calculate_dir_size(path: &Path, filters: &Vec<Regex>) -> Result<u64, MyError> {
     let meta = fs::metadata(path)?;
 
     if meta.is_file() {
-        // daca e fisier, vedem daca trece de filtre
-        // daca nu sunt filtre, il numaram oricum
         let file_name_opt = path.file_name().and_then(|n| n.to_str());
 
         if let Some(name) = file_name_opt {
             if file_matches_filters(name, filters) {
                 return Ok(meta.len());
             } else {
-                // nu se potriveste cu niciun filtru
                 return Ok(0);
             }
         } else {
-            // nume ciudat nu putem lua &str il sarim
             return Ok(0);
         }
     }
@@ -129,7 +152,9 @@ fn calculate_dir_size(path: &Path, filters: &Vec<String>) -> Result<u64, MyError
             };
 
             let child_path = entry.path();
+
             let child_size_res = calculate_dir_size(&child_path, filters);
+
             match child_size_res {
                 Ok(sz) => {
                     sum = sum.saturating_add(sz);
@@ -149,15 +174,15 @@ fn calculate_dir_size(path: &Path, filters: &Vec<String>) -> Result<u64, MyError
     }
 }
 
-// functie simpla: momentan filtrele sunt doar "substring"
-fn file_matches_filters(name: &str, filters: &Vec<String>) -> bool {
+// acum filtrele sunt regex
+fn file_matches_filters(name: &str, filters: &Vec<Regex>) -> bool {
     if filters.is_empty() {
-        // daca nu e niciun filtru rice fisier e ok
+        // daca nu e niciun filtru, acceptam orice fisier
         return true;
     }
 
-    for f in filters {
-        if name.contains(f) {
+    for r in filters {
+        if r.is_match(name) {
             return true;
         }
     }
@@ -189,5 +214,9 @@ fn format_size(bytes: u64) -> String {
 
 fn print_usage() {
     eprintln!("Usage:");
-    eprintln!("  dir_size <dir> [--filter pattern] [--filter pattern2] ...");
+    eprintln!("  dir_size <dir> [--filter \"regex1\"] [--filter \"regex2\"] ...");
+    eprintln!();
+    eprintln!("Examples:");
+    eprintln!("  dir_size ./folder");
+    eprintln!("  dir_size ./folder --filter \".*\\.exe\" --filter \".*\\.dll\"");
 }
