@@ -114,7 +114,7 @@ fn parse_args() -> Result<Config, MyError> {
     let mut args = env::args();
 
     // primul e numele programului (nu-l folosim)
-    let _program_name = args.next();
+    args.next();
 
     let mut root: Option<PathBuf> = None;
     let mut filters: Vec<String> = Vec::new();
@@ -130,12 +130,10 @@ fn parse_args() -> Result<Config, MyError> {
         } else if arg == "--help" {
             print_usage();
             std::process::exit(0);
+        } else if root.is_none() {
+            root = Some(PathBuf::from(arg));
         } else {
-            if root.is_none() {
-                root = Some(PathBuf::from(arg));
-            } else {
-                eprintln!("Avertisment: argument necunoscut sau in plus: {}", arg);
-            }
+            eprintln!("Avertisment: argument necunoscut sau in plus: {}", arg);
         }
     }
 
@@ -151,7 +149,7 @@ fn parse_args() -> Result<Config, MyError> {
 }
 
 // transformam string in regex
-fn build_regex_filters(patterns: &Vec<String>) -> Vec<Regex> {
+fn build_regex_filters(patterns: &[String]) -> Vec<Regex> {
     let mut result = Vec::new();
 
     for pat in patterns {
@@ -167,7 +165,7 @@ fn build_regex_filters(patterns: &Vec<String>) -> Vec<Regex> {
 }
 
 // functie recursiva ce calculeaza dimensiunea
-fn calculate_dir_size(path: &Path, filters: &Vec<Regex>) -> Result<u64, MyError> {
+fn calculate_dir_size(path: &Path, filters: &[Regex]) -> Result<u64, MyError> {
     let meta = fs::metadata(path)?;
 
     if meta.is_file() {
@@ -217,12 +215,12 @@ fn calculate_dir_size(path: &Path, filters: &Vec<Regex>) -> Result<u64, MyError>
 
         Ok(sum)
     } else {
-        // pentru alte tipuri 
+        // pentru alte tipuri
         Ok(0)
     }
 }
 
-fn file_matches_filters(name: &str, filters: &Vec<Regex>) -> bool {
+fn file_matches_filters(name: &str, filters: &[Regex]) -> bool {
     if filters.is_empty() {
         return true;
     }
