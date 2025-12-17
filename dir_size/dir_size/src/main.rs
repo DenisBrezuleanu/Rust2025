@@ -190,7 +190,7 @@ fn calculate_dir_size(path: &Path, filters: &[Regex]) -> Result<u64, MyError> {
         for entry_res in entries {
             let entry = match entry_res {
                 Ok(e) => e,
-                Err(e) => {
+                Err(e) => { 
                     eprintln!("Nu pot citi o intrare din director {:?}: {}", path, e);
                     continue;
                 }
